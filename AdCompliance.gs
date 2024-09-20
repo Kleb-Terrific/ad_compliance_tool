@@ -15,11 +15,12 @@ function main() {
   // Load or create the content cache
   var contentCache = loadContentCache();
   
+  // Iterate through the Ads
   const iterator = AdsApp.ads()
                   .withCondition("Type = RESPONSIVE_SEARCH_AD")
                   .withCondition("campaign.status = ENABLED")
                   .withCondition("ad_group_ad.status = ENABLED")
-                  .withLimit(11)
+                  .withLimit(20)
                   .get();
   
   var row = 2;
@@ -42,6 +43,7 @@ function main() {
       Utilities.sleep(300); //To Avoid API Error 429: Request per minute quota
     });
     
+
     //For Descriptions
     descriptions.forEach((description) => {
       processContent(sheet, contentCache, row, adID, campaignName, adGroupName, 'Description', description.text);
@@ -96,7 +98,7 @@ function loadContentCache() {
   if (!cacheSheet) {
     // If the cache sheet doesn't exist, create it and return an empty cache
     cacheSheet = spreadsheet.insertSheet(CONTENT_CACHE_SHEET_NAME);
-    cacheSheet.appendRow(['Ad ID', 'Type', 'Campaign Name', 'Ad Group Name', 'Content', 'isRestricted', 'Violations']);
+    cacheSheet.appendRow(['Hash ID', 'Ad ID', 'Type', 'Campaign Name', 'Ad Group Name', 'Content', 'isRestricted', 'Violations']);
     return {};
   }
   
@@ -106,68 +108,64 @@ function loadContentCache() {
   // Start from 1 to skip the header row
   for (var i = 1; i < data.length; i++) {
     var row = data[i];
-    var adId = row[0];
-    var type = row[1];
-    var campaignName = row[2];
-    var adGroupName = row[3];
-    var content = row[4];
-    var isRestricted = row[5];
-    var violations = row[6];
+    var hashID = row[0];
+    var adId = row[1];
+    var type = row[2];
+    var campaignName = row[3];
+    var adGroupName = row[4];
+    var content = row[5];
+    var isRestricted = row[6];
+    var violations = row[7];
     
-    if (!cache[adId]) {
-      cache[adId] = {};
-    }
-    if (!cache[adId][type]) {
-      cache[adId][type] = [];
+    if (!cache.hasOwnProperty(hashID)){
+      cache[hashID] = {};
     }
     
-    cache[adId][type].push({
-      campaignName: campaignName,
-      adGroupName: adGroupName,
-      content: content,
-      isRestricted: isRestricted,
-      violations: violations
-    });
+    cache[hashID] = {
+        hashID: hashID,
+        adID: adId,
+        type: type,
+        campaignName: campaignName,
+        adGroupName: adGroupName,
+        content: content,
+        isRestricted: isRestricted,
+        violations: violations
+      };
   }
-  
-  Logger.log(cache);
   return cache;
 }
 
 function processContent(sheet, contentCache, row, adID, campaignName, adGroupName, type, content) {
-  // Check if the content already exists in the cache
-  if (!contentCache[adID]) {
-    contentCache[adID] = {};
-  }
-  if (!contentCache[adID][type]) {
-    contentCache[adID][type] = [];
-  }
-
-  var cachedResult = contentCache[adID][type].find(item => item.content === content);
   
-  if (cachedResult) {
+  // Check if the content already exists in the cache
+  var hashID = generateSHA256Hash(content.toLowerCase());
+  if (contentCache.hasOwnProperty(hashID)) {
     // Use cached result
+    Logger.log("Cache Hit for content: " + content);
+    var cachedResult = contentCache[hashID];
     sheet.getRange(row, 1, 1, 7).setValues([
-      [adID, type, cachedResult.campaignName, cachedResult.adGroupName, content, cachedResult.isRestricted, cachedResult.violations]
+      [adID, campaignName, adGroupName, type, content, cachedResult.isRestricted, cachedResult.violations]
     ]);
   } else {
     // Call API and store result
     var apiResult = callSwaggerApiFunction(ENDPOINT, content, POLICY_FILE_PATH, POLICY_WORKSHEET_NAME);
+    
     if (apiResult) {
-      Logger.log(apiResult);
       var judgment = apiResult.content.isRestricted ? "Restricted" : "Okay";
       sheet.getRange(row, 1, 1, 7).setValues([
-        [adID, type, campaignName, adGroupName, content, judgment, JSON.stringify(apiResult.content.violations)]
+        [adID, campaignName, adGroupName, type, content, judgment, JSON.stringify(apiResult.content.violations)]
       ]);
-      
       // Cache the result
-      contentCache[adID][type].push({
-        content: content,
+      contentCache[hashID] = {
+        hashID: hashID,
+        adID: adID,
         campaignName: campaignName,
         adGroupName: adGroupName,
+        type: type,
+        content: content,
         isRestricted: judgment,
         violations: JSON.stringify(apiResult.content.violations)
-      });
+      };
     }
   }
 }
@@ -182,32 +180,40 @@ function saveContentCache(contentCache) {
     sheet.clear();
   }
   
-  // Add headers
-  sheet.appendRow(['Ad ID', 'Type', 'Campaign Name', 'Ad Group Name', 'Content', 'isRestricted', 'Violations']);
+  sheet.appendRow(['Hash ID', 'Ad ID', 'Type', 'Campaign Name', 'Ad Group Name', 'Content', 'isRestricted', 'Violations']);
   
   // Convert the contentCache object to rows
   var rows = [];
-  for (var adID in contentCache) {
-    for (var type in contentCache[adID]) {
-      contentCache[adID][type].forEach(function(item) {
-        rows.push([
-          adID,
-          type,
-          item.campaignName,
-          item.adGroupName,
-          item.content,
-          item.isRestricted,
-          item.violations
-        ]);
-      });
+  for (var hashID in contentCache){
+    var item = contentCache[hashID]
+    rows.push([
+      item.hashID,
+      item.adID,
+      item.type,
+      item.campaignName,
+      item.adGroupName,
+      item.content,
+      item.isRestricted,
+      item.violations
+      ])
     }
-  }
-  
+
   // Write all rows at once for better performance
   if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, 7).setValues(rows);
+    sheet.getRange(2, 1, rows.length, 8).setValues(rows);
   }
+  sheet.autoResizeColumns(1, 8);
+}
+
+function generateSHA256Hash(content) {
+  // Compute SHA-256 hash for the given content
+  var rawHash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, content);
+
+  // Convert the raw hash bytes to a hexadecimal string
+  var hashString = rawHash.map(function(byte) {
+    var hex = (byte & 0xFF).toString(16); // Convert byte to hex
+    return (hex.length === 1 ? '0' + hex : hex); // Ensure 2-digit format
+  }).join('');
   
-  // Optimize the sheet
-  sheet.autoResizeColumns(1, 7);
+  return hashString; // Return the final SHA-256 hash string
 }
