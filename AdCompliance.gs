@@ -2,9 +2,10 @@ const SPREADSHEET_ID = "1tb6x3JV_wC95jxstpYQ1hW7xKNVhN4TSLc6Zsui5ysU";
 const TEMP = 0;
 const GPT_MODEL = "gpt-4o";
 const POLICY_FILE_PATH = "https://docs.google.com/spreadsheets/d/163ytY_todByb7luppgCsxY003ZBdeYtpHGO9fecqGf0/edit?gid=253256244#gid=253256244";
-const POLICY_WORKSHEET_NAME = "Rules"
-const CONTENT_CACHE_SHEET_NAME = "ContentCache"
-const ENDPOINT = "/content"
+const POLICY_WORKSHEET_NAME = "Rules";
+const CONTENT_CACHE_SHEET_NAME = "ContentCache";
+const ENDPOINT = "/content";
+const CM_EMAIL = "kleb.dale@terrific.co.il";
 
 
 function main() {
@@ -20,7 +21,7 @@ function main() {
                   .withCondition("Type = RESPONSIVE_SEARCH_AD")
                   .withCondition("campaign.status = ENABLED")
                   .withCondition("ad_group_ad.status = ENABLED")
-                  .withLimit(20)
+                  .withLimit(5)
                   .get();
   
   var row = 2;
@@ -55,6 +56,9 @@ function main() {
   
   saveContentCache(contentCache);
   sheet.autoResizeColumns(1, 7);
+  
+  // Notify campaign manager if a restricted ad copy is found
+  notifyManager(sheet);
 }
 
 
@@ -216,4 +220,59 @@ function generateSHA256Hash(content) {
   }).join('');
   
   return hashString; // Return the final SHA-256 hash string
+}
+
+function notifyManager(sheet){
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var restrictedAds = [];
+
+  var isRestrictedIndex = headers.indexOf("isRestricted");
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][isRestrictedIndex] === "Restricted") {
+      restrictedAds.push(data[i]);
+    }
+  }
+
+  if (restrictedAds.length > 0) {
+    var emailBody = createEmailBody(headers, restrictedAds);
+    sendEmail(emailBody, CM_EMAIL);
+  }
+}
+
+function createEmailBody(headers, restrictedAds) {
+  var htmlBody = "<h2>The following ads have been flagged as Restricted:</h2>";
+  
+  htmlBody += "<table border='1' style='border-collapse: collapse; width: 100%;'>";
+  
+  // Create table header
+  htmlBody += "<tr style='background-color: #f2f2f2;'>";
+  headers.forEach(function(header) {
+    htmlBody += "<th style='padding: 8px; text-align: left;'>" + header + "</th>";
+  });
+  htmlBody += "</tr>";
+  
+  // Add each restricted ad to the table
+  restrictedAds.forEach(function(ad, index) {
+    htmlBody += "<tr" + (index % 2 === 0 ? " style='background-color: #f9f9f9;'" : "") + ">";
+    ad.forEach(function(cell) {
+      htmlBody += "<td style='padding: 8px;'>" + cell + "</td>";
+    });
+    htmlBody += "</tr>";
+  });
+  
+  htmlBody += "</table>";
+  
+  return htmlBody;
+}
+
+function sendEmail(body) {
+  var subject = "Ad Compliance Tool Alert: Restricted Ads Detected";
+  
+  MailApp.sendEmail({
+    to: CM_EMAIL,
+    subject: subject,
+    htmlBody: body
+  });
+  Logger.log("Alert Email sent to " + CM_EMAIL);
 }
